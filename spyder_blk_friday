@@ -1,0 +1,175 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Fri Jun 16 08:44:45 2017
+
+@author: Kingshuk Bose
+"""
+
+import numpy as np
+import pandas as pd
+from pandas import Series,DataFrame
+train=pd.read_csv('/home/kingshuk/Downloads/ML-competiotion/Black Friday/train.csv')
+
+
+
+
+def convert_age(age):
+    if age=='0-17':
+        return (0+17.0)/2
+    elif age=='18-25':
+        return (18.0+25.0)/2
+    elif age=='26-35':
+        return (26.0+35.0)/2
+    elif age=='36-45':
+        return (36.0+45.0)/2
+    elif age=='46-50':
+        return (46.0+50.0)/2
+    elif age=='51-55':
+        return (51.0+55.0)/2
+    elif age=='55+':
+        return (55.0+65.0)/2
+    
+
+    
+def convert_staycity(n):
+    if n=='0':
+        return 0
+    elif n=='1':
+        return 1
+    elif n=='2':
+        return 2
+    elif n=='3':
+        return 3
+    else:
+        return 4
+    
+    
+    
+    
+oc_lookup=DataFrame(train.groupby(['Occupation'])['Purchase'].mean().sort_values()).reset_index()
+oc_lookup.columns=['Occupation','Avg_Purchase']
+oc_lookup['occ_lkp']=np.arange(1,len(oc_lookup)+1)
+
+prd1_lookup=DataFrame(train.groupby(['Product_Category_1'])['Purchase'].mean().sort_values()).reset_index()
+prd1_lookup.columns=['Product_Category_1','Avg_Purchase']
+prd1_lookup['prd_lkp1']=np.arange(1,len(prd1_lookup)+1)
+
+prd2_lookup=DataFrame(train.groupby(['Product_Category_2'])['Purchase'].mean().sort_values()).reset_index()
+prd2_lookup.columns=['Product_Category_2','Avg_Purchase']
+prd2_lookup['prd_lkp2']=np.arange(1,len(prd2_lookup)+1)
+
+prd3_lookup=DataFrame(train.groupby(['Product_Category_3'])['Purchase'].mean().sort_values()).reset_index()
+prd3_lookup.columns=['Product_Category_3','Avg_Purchase']
+prd3_lookup['prd_lkp3']=np.arange(1,len(prd3_lookup)+1)
+
+
+NO_Purchase=DataFrame(train.groupby(['User_ID'])['Purchase'].count()).reset_index()
+Avg_Purchase=DataFrame(train.groupby(['User_ID'])['Purchase'].mean()).reset_index()
+
+
+NO_Purchase.columns=['User_ID','Purchase_Count']
+Avg_Purchase.columns=['User_ID','Avg_Purchase']
+
+Avg_Product_Price=DataFrame(train.groupby(['Product_ID'])['Purchase'].mean()).reset_index()
+Avg_Product_Price.columns=['Product_ID','Avg_Product_Price']
+
+Product_count=DataFrame(train.groupby(['Product_ID'])['Purchase'].count()).reset_index()
+Product_count.columns=['Product_ID','Product_count']
+
+
+
+def Transform(data):
+    data=pd.get_dummies(data,columns=['Gender','City_Category'])
+    data.drop('Gender_F',1,inplace=True)
+    data.drop('City_Category_C',1,inplace=True)
+    data['Age_Point']=data['Age'].map(convert_age)
+    data['Stay_City_Years']=data['Stay_In_Current_City_Years'].map(convert_staycity)
+    data=pd.merge(data,oc_lookup,on='Occupation',how='left')
+    data.drop('Avg_Purchase',1,inplace=True)
+    data.drop('Occupation',1,inplace=True)
+    data=pd.merge(data,prd1_lookup,on='Product_Category_1',how='left')
+    data.drop('Product_Category_1',1,inplace=True)
+    data.drop('Avg_Purchase',1,inplace=True)
+    data=pd.merge(data,prd2_lookup,on='Product_Category_2',how='left')
+    data.drop('Product_Category_2',1,inplace=True)
+    data.drop('Avg_Purchase',1,inplace=True)
+    data=pd.merge(data,prd3_lookup,on='Product_Category_3',how='left')
+    data.drop('Product_Category_3',1,inplace=True)
+    data.drop('Avg_Purchase',1,inplace=True)
+    data=pd.merge(data,NO_Purchase,on='User_ID',how='left')
+    data=pd.merge(data,Avg_Purchase,on='User_ID',how='left')
+    data=pd.merge(data,Avg_Product_Price,on='Product_ID',how='left')
+    data=pd.merge(data,Product_count,on='Product_ID',how='left')
+    features=['occ_lkp','prd_lkp1','prd_lkp2','prd_lkp3','Marital_Status','Gender_M','City_Category_A','City_Category_B','Age_Point','Stay_City_Years','Purchase_Count','Avg_Purchase','Avg_Product_Price','Product_count']
+    X=data[features]
+    return X
+
+
+
+X=Transform(train)
+Normalize_lkp=X.describe()
+
+def normalize(data,col):
+    Max=Normalize_lkp.loc['max'][col]
+    Min=Normalize_lkp.loc['min'][col]
+    return (Max-data[col])/(Max-Min)
+
+for col in X.columns:
+    X[col]=normalize(X,col)
+    
+
+X['prd_lkp2'].fillna(0,inplace=True)
+X['prd_lkp3'].fillna(0,inplace=True)
+
+X.head()
+
+Y=train['Purchase']
+
+from sklearn.model_selection import train_test_split
+X_train,X_valid,Y_train,Y_valid=train_test_split(X,Y,test_size=0.33,random_state=42)
+
+
+from xgboost import XGBRegressor
+from sklearn.grid_search import GridSearchCV
+
+XGB=XGBRegressor(reg_alpha=0.1, reg_lambda=0.1,colsample_bytree=0.7,max_depth=10,n_estimators=2000)
+parameters={'learning_rate':[0.1],
+           'max_depth':[10],
+           'subsample':[0.9],
+           'colsample_bytree':[0.5],
+           'n_estimators':[300],
+           'seed':[1337]}
+
+GSV = GridSearchCV(XGB, parameters, n_jobs=3,verbose=2, refit=True,scoring='neg_mean_squared_error')
+GSV.fit(X_train,Y_train)
+
+predict=GSV.predict(X_valid)
+error=predict-Y_valid
+np.sqrt(np.mean(error**2))
+
+in_sample_ls=np.sqrt(np.mean((Y_train-GSV.predict(X_train))**2))
+in_sample_ls
+
+test=pd.read_csv('/home/kingshuk/Downloads/ML-competiotion/Black Friday/test.csv')
+
+test_x=Transform(test)
+
+for col in test_x.columns:
+    test_x[col]=normalize(test_x,col)
+    
+
+test_x['prd_lkp2'].fillna(0,inplace=True)
+test_x['prd_lkp3'].fillna(0,inplace=True)
+
+test_x.head()
+
+
+prediction=GSV.predict(test_x)
+
+test['Purchase']=prediction
+
+submission=test[['User_ID','Product_ID','Purchase']]
+submission.head()
+
+submission1=submission.to_csv('/home/kingshuk/Spyder_files/submission2.csv',index=False)
